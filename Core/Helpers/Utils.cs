@@ -82,6 +82,7 @@ namespace Brovan.Core.Helpers
             }
         }
 
+
         /// <summary>
         /// Prepare the console for virtual terminal processing and Unicode output.
         /// </summary>
@@ -109,9 +110,9 @@ namespace Brovan.Core.Helpers
             NativeWinImports.SetConsoleMode(Handle, Mode);
         }
 
-        public static void PrintHighlight(string Message, bool ColorPrefixOnly = false, bool HidePrefix = false)
+        public static void PrintHighlight(string Message, bool ColorPrefixOnly = false, bool HidePrefix = false, bool IgnoreSilent = false)
         {
-            if (SilentMode)
+            if (!IgnoreSilent && SilentMode)
                 return;
 
             string Prefix = null;

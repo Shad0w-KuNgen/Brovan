@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Formats.Tar;
+using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -124,8 +126,23 @@ namespace Brovan
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         public static extern SafeFileHandle CreateFileW(string FileName, uint DesiredAccess, FileShare ShareMode, IntPtr SecurityAttributes, FileMode CreationDisposition, uint FlagsAndAttributes, IntPtr TemplateFile);
 
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool CreateSymbolicLinkW(string lpSymlinkFileName, string lpTargetFileName, int dwFlags);
+
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool DeviceIoControl(SafeFileHandle Handle, uint IoControlCode, IntPtr InBuffer, int InBufferSize, byte[] OutBuffer, int OutBufferSize, out int BytesReturned, IntPtr Overlapped);
+    }
+
+    internal class NativeUnixImports
+    {
+        [DllImport("libc", EntryPoint = "link", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern int Link(string oldpath, string newpath);
+
+        [DllImport("libc", EntryPoint = "symlink", SetLastError = true, CharSet = CharSet.Ansi)]
+        public static extern int Symlink(string oldpath, string newpath);
     }
 
     internal class GeneralHelper
@@ -1088,6 +1105,645 @@ namespace Brovan
                 File.WriteAllText(HostPath, Content, new UTF8Encoding(false));
             }
 
+            private sealed class UbuntuRootfsPendingLink
+            {
+                public string EntryPath;
+                public string LinkName;
+                public TarEntryType EntryType;
+                public UnixFileMode Mode;
+                public DateTimeOffset ModificationTime;
+            }
+
+            private static string GetUbuntuBaseRootfsUrl(BinaryArchitecture Architecture)
+            {
+                return Architecture switch
+                {
+                    BinaryArchitecture.x64 => "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-amd64.tar.gz",
+                    _ => null,
+                };
+            }
+
+            private static bool IsUbuntuBaseRootfsInstalled()
+            {
+                string[] RequiredFiles =
+                {
+                    Path.Combine(LinuxVirtualFileSystemRoot, "lib64", "ld-linux-x86-64.so.2"),
+                    Path.Combine(LinuxVirtualFileSystemRoot, "bin", "bash"),
+                    Path.Combine(LinuxVirtualFileSystemRoot, "usr", "bin", "bash"),
+                };
+
+                for (int i = 0; i < RequiredFiles.Length; i++)
+                {
+                    if (File.Exists(RequiredFiles[i]))
+                        return true;
+                }
+
+                return false;
+            }
+            public static bool EnsureUbuntuBaseRootfs(BinaryArchitecture Architecture)
+            {
+                if (IsUbuntuBaseRootfsInstalled())
+                    return true;
+
+                string RootfsUrl = GetUbuntuBaseRootfsUrl(Architecture);
+                if (string.IsNullOrWhiteSpace(RootfsUrl))
+                {
+                    Utils.LogError($"[IO] Ubuntu Base rootfs is not available for architecture '{Architecture}'.");
+                    return false;
+                }
+
+                try
+                {
+                    Directory.CreateDirectory(LinuxVirtualFileSystemRoot);
+                    PrintHighlight("[+] Downloading Ubuntu Base rootfs...", true);
+
+                    using HttpClient Client = new HttpClient();
+                    Client.Timeout = TimeSpan.FromMinutes(30);
+
+                    using HttpResponseMessage Response = Client.GetAsync(RootfsUrl, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+                    Response.EnsureSuccessStatusCode();
+
+                    using Stream ResponseStream = Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+                    using GZipStream GzipStream = new GZipStream(ResponseStream, CompressionMode.Decompress, leaveOpen: false);
+                    using TarReader Reader = new TarReader(GzipStream);
+
+                    List<UbuntuRootfsPendingLink> PendingLinks = new();
+                    Dictionary<string, UbuntuRootfsPendingLink> PendingLinksByArchivePath = new(StringComparer.Ordinal);
+                    TarEntry Entry;
+
+                    while ((Entry = Reader.GetNextEntry()) != null)
+                    {
+                        string NormalizedEntryPath = NormalizeUbuntuRootfsArchivePath(Entry.Name);
+                        if (string.IsNullOrWhiteSpace(NormalizedEntryPath))
+                            continue;
+
+                        string HostPath = ResolveUbuntuRootfsHostPath(NormalizedEntryPath);
+                        if (string.IsNullOrWhiteSpace(HostPath))
+                            continue;
+
+
+                        if (Entry.EntryType == TarEntryType.Directory)
+                        {
+                            DeletePathIfExists(HostPath);
+                            Directory.CreateDirectory(HostPath);
+                            ApplyTarMetadata(HostPath, Entry, true);
+                            continue;
+                        }
+
+                        if (Entry.EntryType == TarEntryType.SymbolicLink || Entry.EntryType == TarEntryType.HardLink)
+                        {
+
+                            UbuntuRootfsPendingLink PendingLink = new UbuntuRootfsPendingLink
+                            {
+                                ArchivePath = NormalizedEntryPath,
+                                EntryPath = HostPath,
+                                LinkName = Entry.LinkName,
+                                EntryType = Entry.EntryType,
+                                Mode = Entry.Mode,
+                                ModificationTime = Entry.ModificationTime,
+                            };
+
+                            PendingLinks.Add(PendingLink);
+                            PendingLinksByArchivePath[NormalizedEntryPath] = PendingLink;
+                            continue;
+                        }
+
+                        if (Entry.EntryType != TarEntryType.RegularFile)
+                            continue;
+
+                        if (Entry.DataStream == null)
+                            continue;
+
+                        string Parent = Path.GetDirectoryName(HostPath);
+                        if (!string.IsNullOrWhiteSpace(Parent))
+                            Directory.CreateDirectory(Parent);
+
+                        DeletePathIfExists(HostPath);
+
+                        using (FileStream Output = new FileStream(HostPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        {
+                            Entry.DataStream.CopyTo(Output);
+                        }
+
+                        ApplyTarMetadata(HostPath, Entry, false);
+                    }
+
+                    List<UbuntuRootfsPendingLink> PendingHardLinks = PendingLinks.Where(Link => Link.EntryType == TarEntryType.HardLink).ToList();
+                    while (PendingHardLinks.Count > 0)
+                    {
+                        bool Progress = false;
+                        List<UbuntuRootfsPendingLink> Remaining = new();
+
+                        foreach (UbuntuRootfsPendingLink Link in PendingHardLinks)
+                        {
+                            if (TryMaterializeRootfsHardLink(Link, PendingLinksByArchivePath))
+                            {
+                                Progress = true;
+                                continue;
+                            }
+
+                            Remaining.Add(Link);
+                        }
+
+                        if (!Progress)
+                        {
+                            PendingHardLinks = Remaining;
+                            break;
+                        }
+
+                        PendingHardLinks = Remaining;
+                    }
+
+                    if (PendingHardLinks.Count > 0)
+                        Utils.LogError($"[IO] {PendingHardLinks.Count} rootfs hardlink(s) could not be resolved after retries.");
+
+                    List<UbuntuRootfsPendingLink> PendingSymlinks = PendingLinks.Where(Link => Link.EntryType == TarEntryType.SymbolicLink).ToList();
+                    while (PendingSymlinks.Count > 0)
+                    {
+                        bool Progress = false;
+                        List<UbuntuRootfsPendingLink> Remaining = new();
+
+                        foreach (UbuntuRootfsPendingLink Link in PendingSymlinks)
+                        {
+                            if (TryMaterializeRootfsSymlink(Link, PendingLinksByArchivePath))
+                            {
+                                Progress = true;
+                                continue;
+                            }
+
+                            Remaining.Add(Link);
+                        }
+
+                        if (!Progress)
+                        {
+                            PendingSymlinks = Remaining;
+                            break;
+                        }
+
+                        PendingSymlinks = Remaining;
+                    }
+
+                    if (PendingSymlinks.Count > 0)
+                        Utils.LogError($"[IO] {PendingSymlinks.Count} rootfs symlink(s) could not be resolved after retries.");
+
+                    if (!IsUbuntuBaseRootfsInstalled())
+                        Utils.LogError("[IO] Ubuntu Base rootfs download completed, but the expected interpreter file was still not found.");
+
+                    return IsUbuntuBaseRootfsInstalled();
+                }
+                catch (Exception ex)
+                {
+                    Utils.LogError($"[IO] Failed to download or extract Ubuntu Base rootfs: {ex.Message}");
+                    return false;
+                }
+            }
+
+            private static bool CreateHardLinkPortable(string LinkPath, string ExistingPath)
+            {
+                try
+                {
+                    if (IsWindows)
+                        return NativeWinImports.CreateHardLinkW(LinkPath, ExistingPath, IntPtr.Zero);
+
+                    return NativeUnixImports.Link(ExistingPath, LinkPath) == 0;
+                }
+                catch (Exception ex)
+                {
+                    Utils.LogError($"[IO] Failed to create hardlink '{LinkPath}' -> '{ExistingPath}': {ex.Message}");
+                    return false;
+                }
+            }
+
+            private static bool CreateSymbolicLinkPortable(string LinkPath, string TargetPath, bool IsDirectory)
+            {
+                try
+                {
+                    if (IsWindows)
+                    {
+                        const int SYMBOLIC_LINK_FLAG_DIRECTORY = 0x1;
+                        const int SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE = 0x2;
+                        int Flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+                        if (IsDirectory)
+                            Flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+
+                        return NativeWinImports.CreateSymbolicLinkW(LinkPath, TargetPath, Flags);
+                    }
+
+                    return NativeUnixImports.Symlink(TargetPath, LinkPath) == 0;
+                }
+                catch (Exception ex)
+                {
+                    Utils.LogError($"[IO] Failed to create symlink '{LinkPath}' -> '{TargetPath}': {ex.Message}");
+                    return false;
+                }
+            }
+
+            private static void ApplyTarMetadata(string TargetPath, TarEntry Entry, bool IsDirectory)
+            {
+                if (Entry == null)
+                    return;
+
+                ApplyTarMetadata(TargetPath, Entry.Mode, Entry.ModificationTime, IsDirectory);
+            }
+
+            private static void ApplyTarMetadata(string TargetPath, UnixFileMode Mode, DateTimeOffset ModificationTime, bool IsDirectory)
+            {
+                if (string.IsNullOrWhiteSpace(TargetPath))
+                    return;
+
+                try
+                {
+                    if (ModificationTime != default)
+                        File.SetLastWriteTimeUtc(TargetPath, ModificationTime.UtcDateTime);
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    FileSystemInfo Info = IsDirectory ? new DirectoryInfo(TargetPath) : new FileInfo(TargetPath);
+                    Info.UnixFileMode = Mode;
+                }
+                catch
+                {
+                }
+            }
+            private static bool TryMaterializeRootfsHardLink(UbuntuRootfsPendingLink Link, IReadOnlyDictionary<string, UbuntuRootfsPendingLink> PendingLinksByArchivePath)
+            {
+                if (Link == null || string.IsNullOrWhiteSpace(Link.EntryPath) || string.IsNullOrWhiteSpace(Link.LinkName))
+                    return false;
+
+                if (!TryResolveUbuntuRootfsArchivePath(Link.LinkName, PendingLinksByArchivePath, out string ResolvedArchivePath))
+                {
+                    Utils.LogError($"[IO] Failed to resolve hardlink target '{Link.LinkName}' for '{Link.EntryPath}'.");
+                    return false;
+                }
+
+                string HardLinkTarget = ResolveUbuntuRootfsHostPath(ResolvedArchivePath);
+                if (string.IsNullOrWhiteSpace(HardLinkTarget) || !File.Exists(HardLinkTarget))
+                {
+                    Utils.LogError($"[IO] Failed to resolve hardlink target '{Link.LinkName}' for '{Link.EntryPath}'.");
+                    return false;
+                }
+
+                string HardLinkParent = Path.GetDirectoryName(Link.EntryPath);
+                if (!string.IsNullOrWhiteSpace(HardLinkParent))
+                    Directory.CreateDirectory(HardLinkParent);
+
+                DeletePathIfExists(Link.EntryPath);
+
+                if (!CreateHardLinkPortable(Link.EntryPath, HardLinkTarget))
+                {
+                    Utils.LogError($"[IO] Failed to create hardlink '{Link.EntryPath}' -> '{Link.LinkName}'.");
+                    return false;
+                }
+
+                ApplyTarMetadata(Link.EntryPath, Link.Mode, Link.ModificationTime, false);
+                return true;
+            }
+
+            private static bool TryMaterializeRootfsSymlink(UbuntuRootfsPendingLink Link, IReadOnlyDictionary<string, UbuntuRootfsPendingLink> PendingLinksByArchivePath)
+            {
+                string ResolvedTarget = ResolveUbuntuRootfsLinkTargetHostPath(Link.EntryPath, Link.LinkName, PendingLinksByArchivePath);
+                if (string.IsNullOrWhiteSpace(ResolvedTarget) || (!File.Exists(ResolvedTarget) && !Directory.Exists(ResolvedTarget)))
+                {
+                    Utils.LogError($"[IO] Failed to resolve symlink target '{Link.LinkName}' for '{Link.EntryPath}'.");
+                    return false;
+                }
+
+                string Parent = Path.GetDirectoryName(Link.EntryPath);
+                if (!string.IsNullOrWhiteSpace(Parent))
+                    Directory.CreateDirectory(Parent);
+
+                string EntryFullPath = Path.GetFullPath(Link.EntryPath);
+                string TargetFullPath = Path.GetFullPath(ResolvedTarget);
+
+                StringComparison Comparison = IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                if (string.Equals(TargetFullPath, EntryFullPath, Comparison))
+                {
+                    bool IsDirectory = Directory.Exists(ResolvedTarget) && !File.Exists(ResolvedTarget);
+                    ApplyTarMetadata(Link.EntryPath, Link.Mode, Link.ModificationTime, IsDirectory);
+                    return true;
+                }
+
+                bool EntryIsDirectory = Directory.Exists(Link.EntryPath) && !File.Exists(Link.EntryPath);
+                bool TargetIsDirectory = Directory.Exists(ResolvedTarget) && !File.Exists(ResolvedTarget);
+
+                if (EntryIsDirectory && TargetIsDirectory)
+                {
+                    if (ArePathsNested(EntryFullPath, TargetFullPath))
+                    {
+                        Utils.LogError($"[IO] Refusing to flatten recursive directory symlink '{Link.EntryPath}' -> '{Link.LinkName}'.");
+                        return false;
+                    }
+
+                    if (!TryCopyDirectoryRecursive(Link.EntryPath, ResolvedTarget, Link.Mode, Link.ModificationTime))
+                    {
+                        Utils.LogError($"[IO] Failed to merge existing directory '{Link.EntryPath}' into symlink target '{ResolvedTarget}'.");
+                        return false;
+                    }
+                }
+
+                DeletePathIfExists(Link.EntryPath);
+
+                if (TargetIsDirectory)
+                {
+                    if (!TryCopyDirectoryRecursive(ResolvedTarget, Link.EntryPath, Link.Mode, Link.ModificationTime))
+                    {
+                        Utils.LogError($"[IO] Failed to flatten symlink directory '{Link.EntryPath}' -> '{Link.LinkName}'.");
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                try
+                {
+                    File.Copy(ResolvedTarget, Link.EntryPath, true);
+                    ApplyTarMetadata(Link.EntryPath, Link.Mode, Link.ModificationTime, false);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Utils.LogError($"[IO] Failed to flatten symlink '{Link.EntryPath}' -> '{Link.LinkName}': {ex.Message}");
+                    return false;
+                }
+            }
+
+            private static bool ArePathsNested(string FirstPath, string SecondPath)
+            {
+                if (string.IsNullOrWhiteSpace(FirstPath) || string.IsNullOrWhiteSpace(SecondPath))
+                    return false;
+
+                string FirstFullPath = Path.GetFullPath(FirstPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string SecondFullPath = Path.GetFullPath(SecondPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                StringComparison Comparison = IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                if (string.Equals(FirstFullPath, SecondFullPath, Comparison))
+                    return true;
+                return SecondFullPath.StartsWith(FirstFullPath + Path.DirectorySeparatorChar, Comparison) ||
+                       SecondFullPath.StartsWith(FirstFullPath + Path.AltDirectorySeparatorChar, Comparison) ||
+                       FirstFullPath.StartsWith(SecondFullPath + Path.DirectorySeparatorChar, Comparison) ||
+                       FirstFullPath.StartsWith(SecondFullPath + Path.AltDirectorySeparatorChar, Comparison);
+            }
+
+            private static bool TryCopyDirectoryRecursive(string SourceDirectory, string DestinationDirectory, UnixFileMode Mode, DateTimeOffset ModificationTime)
+            {
+                if (string.IsNullOrWhiteSpace(SourceDirectory) || string.IsNullOrWhiteSpace(DestinationDirectory))
+                    return false;
+
+                try
+                {
+                    string SourceFullPath = Path.GetFullPath(SourceDirectory);
+                    string DestinationFullPath = Path.GetFullPath(DestinationDirectory);
+
+                    StringComparison Comparison = IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                    if (string.Equals(SourceFullPath, DestinationFullPath, Comparison))
+                    {
+                        Directory.CreateDirectory(DestinationFullPath);
+                        ApplyTarMetadata(DestinationFullPath, Mode, ModificationTime, true);
+                        return true;
+                    }
+
+                    Directory.CreateDirectory(DestinationFullPath);
+
+                    foreach (string DirectoryPath in Directory.EnumerateDirectories(SourceFullPath, "*", SearchOption.AllDirectories))
+                    {
+                        string RelativePath = Path.GetRelativePath(SourceFullPath, DirectoryPath);
+                        string DestinationPath = Path.Combine(DestinationFullPath, RelativePath);
+                        Directory.CreateDirectory(DestinationPath);
+
+                        try
+                        {
+                            DirectoryInfo SourceInfo = new DirectoryInfo(DirectoryPath);
+                            DirectoryInfo DestinationInfo = new DirectoryInfo(DestinationPath);
+                            if (SourceInfo.Exists)
+                            {
+                                if (SourceInfo.LastWriteTimeUtc != default)
+                                    Directory.SetLastWriteTimeUtc(DestinationPath, SourceInfo.LastWriteTimeUtc);
+
+                                DestinationInfo.UnixFileMode = SourceInfo.UnixFileMode;
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    foreach (string FilePath in Directory.EnumerateFiles(SourceFullPath, "*", SearchOption.AllDirectories))
+                    {
+                        string RelativePath = Path.GetRelativePath(SourceFullPath, FilePath);
+                        string DestinationPath = Path.Combine(DestinationFullPath, RelativePath);
+                        string DestinationParent = Path.GetDirectoryName(DestinationPath);
+                        if (!string.IsNullOrWhiteSpace(DestinationParent))
+                            Directory.CreateDirectory(DestinationParent);
+
+                        File.Copy(FilePath, DestinationPath, true);
+
+                        try
+                        {
+                            FileInfo SourceInfo = new FileInfo(FilePath);
+                            FileInfo DestinationInfo = new FileInfo(DestinationPath);
+                            if (SourceInfo.Exists)
+                            {
+                                if (SourceInfo.LastWriteTimeUtc != default)
+                                    File.SetLastWriteTimeUtc(DestinationPath, SourceInfo.LastWriteTimeUtc);
+
+                                DestinationInfo.UnixFileMode = SourceInfo.UnixFileMode;
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    ApplyTarMetadata(DestinationFullPath, Mode, ModificationTime, true);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Utils.LogError($"[IO] Failed to copy directory '{SourceDirectory}' to '{DestinationDirectory}': {ex.Message}");
+                    return false;
+                }
+            }
+            private static string ResolveUbuntuRootfsArchiveLinkTarget(string LinkEntryPath, string LinkName)
+            {
+                if (string.IsNullOrWhiteSpace(LinkEntryPath) || string.IsNullOrWhiteSpace(LinkName))
+                    return null;
+
+                string NormalizedLinkName = LinkName.Replace('\\', '/').Trim();
+                if (NormalizedLinkName.Length == 0)
+                    return null;
+
+                string RelativeEntryPath = NormalizeUbuntuRootfsArchivePath(LinkEntryPath);
+                if (RelativeEntryPath == null)
+                    return null;
+
+                string CombinedPath = NormalizedLinkName.StartsWith("/", StringComparison.Ordinal)
+                    ? NormalizedLinkName
+                    : Path.Combine(Path.GetDirectoryName(RelativeEntryPath) ?? string.Empty, NormalizedLinkName).Replace('\\', '/');
+
+                return NormalizeUbuntuRootfsArchivePath(CombinedPath);
+            }
+
+            private static bool TryResolveUbuntuRootfsArchivePath(string PathValue, IReadOnlyDictionary<string, UbuntuRootfsPendingLink> PendingLinksByArchivePath, out string ResolvedPath)
+            {
+                ResolvedPath = NormalizeUbuntuRootfsArchivePath(PathValue);
+                if (ResolvedPath == null)
+                    return false;
+
+                if (ResolvedPath.Length == 0)
+                    return true;
+
+                HashSet<string> VisitedPaths = new(StringComparer.Ordinal);
+
+                while (true)
+                {
+                    if (!VisitedPaths.Add(ResolvedPath))
+                        return false;
+
+                    string[] Parts = ResolvedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    bool AppliedLink = false;
+
+                    for (int PrefixLength = Parts.Length; PrefixLength >= 1; PrefixLength--)
+                    {
+                        string Prefix = string.Join('/', Parts.Take(PrefixLength));
+                        if (!PendingLinksByArchivePath.TryGetValue(Prefix, out UbuntuRootfsPendingLink PendingLink) || PendingLink.EntryType != TarEntryType.SymbolicLink)
+                            continue;
+
+                        string ResolvedPrefix = ResolveUbuntuRootfsArchiveLinkTarget(Prefix, PendingLink.LinkName);
+                        if (string.IsNullOrWhiteSpace(ResolvedPrefix))
+                            return false;
+
+                        if (PrefixLength == Parts.Length)
+                            ResolvedPath = ResolvedPrefix;
+                        else
+                        {
+                            string Suffix = string.Join('/', Parts.Skip(PrefixLength));
+                            ResolvedPath = string.IsNullOrWhiteSpace(Suffix) ? ResolvedPrefix : $"{ResolvedPrefix}/{Suffix}";
+                            ResolvedPath = NormalizeUbuntuRootfsArchivePath(ResolvedPath);
+                            if (ResolvedPath == null)
+                                return false;
+                        }
+
+                        AppliedLink = true;
+                        break;
+                    }
+
+                    if (!AppliedLink)
+                        return true;
+                }
+            }
+            private static string ResolveUbuntuRootfsLinkTargetHostPath(string LinkEntryPath, string LinkName, IReadOnlyDictionary<string, UbuntuRootfsPendingLink> PendingLinksByArchivePath)
+            {
+                string ResolvedArchiveTarget = ResolveUbuntuRootfsArchiveLinkTarget(LinkEntryPath, LinkName);
+                if (ResolvedArchiveTarget == null)
+                    return null;
+
+                if (!TryResolveUbuntuRootfsArchivePath(ResolvedArchiveTarget, PendingLinksByArchivePath, out string FullyResolvedArchivePath))
+                    return null;
+
+                return ResolveUbuntuRootfsHostPath(FullyResolvedArchivePath);
+            }
+
+            private static string NormalizeUbuntuRootfsArchivePath(string PathValue)
+            {
+                if (string.IsNullOrWhiteSpace(PathValue))
+                    return null;
+
+                string Normalized = PathValue.Replace('\\', '/').Trim();
+                if (Normalized.Length == 0)
+                    return null;
+
+                while (Normalized.StartsWith("./", StringComparison.Ordinal))
+                    Normalized = Normalized.Substring(2);
+
+                while (Normalized.StartsWith("/", StringComparison.Ordinal))
+                    Normalized = Normalized.Substring(1);
+
+                if (Normalized.Length == 0)
+                    return string.Empty;
+
+                List<string> Parts = new();
+                foreach (string Part in Normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (Part == ".")
+                        continue;
+
+                    if (Part == "..")
+                    {
+                        if (Parts.Count == 0)
+                            return null;
+
+                        Parts.RemoveAt(Parts.Count - 1);
+                        continue;
+                    }
+
+                    Parts.Add(Part);
+                }
+
+                if (Parts.Count == 0)
+                    return string.Empty;
+
+                return string.Join('/', Parts);
+            }
+
+            private static string ResolveUbuntuRootfsHostPath(string RelativePath)
+            {
+                string Normalized = NormalizeUbuntuRootfsArchivePath(RelativePath);
+                if (Normalized == null)
+                    return null;
+
+                string Root = Path.GetFullPath(LinuxVirtualFileSystemRoot);
+                string Combined = string.IsNullOrEmpty(Normalized)
+                    ? Root
+                    : Path.GetFullPath(Path.Combine(Root, Normalized.Replace('/', Path.DirectorySeparatorChar)));
+
+                StringComparison Comparison = IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                string RootPrefix = Root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!(string.Equals(Combined, RootPrefix, Comparison) || Combined.StartsWith(RootPrefix + Path.DirectorySeparatorChar, Comparison)))
+                    return null;
+
+                return Combined;
+            }
+
+            private static void DeletePathIfExists(string PathValue)
+            {
+                if (string.IsNullOrWhiteSpace(PathValue))
+                    return;
+
+                try
+                {
+                    if (File.Exists(PathValue))
+                    {
+                        File.Delete(PathValue);
+                        return;
+                    }
+
+                    if (Directory.Exists(PathValue))
+                    {
+                        try
+                        {
+                            FileAttributes Attributes = File.GetAttributes(PathValue);
+                            if ((Attributes & FileAttributes.ReparsePoint) != 0)
+                            {
+                                Directory.Delete(PathValue);
+                                return;
+                            }
+                        }
+                        catch
+                        {
+                        }
+
+                        Directory.Delete(PathValue, true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+
             /// <summary>
             /// Creates a deterministic machine-id for the Linux VFS root.
             /// </summary>
@@ -1705,7 +2361,7 @@ namespace Brovan
                         if (!IsMatch)
                             continue;
 
-                        if (CandidateMount.Length > MountPoint.Length)
+                        if (CandidateMount.Length > MountPoint.Length || (CandidateMount.Length == MountPoint.Length && !string.Equals(HostRoot, Pair.Value, StringComparison.Ordinal)))
                         {
                             MountPoint = CandidateMount;
                             HostRoot = Pair.Value;

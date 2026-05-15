@@ -331,7 +331,24 @@ namespace Brovan.Core.Emulation.Guests
                 if (TryReadElfInterpreterPath(Binary, Data, out string InterpreterPath))
                 {
                     if (!TryLoadElfInterpreter(Instance, Binary, InterpreterPath, ref HighestAddress, out StartupEntry, out InterpreterBase))
-                        throw new InvalidOperationException($"Failed to load the ELF interpreter '{InterpreterPath}'.");
+                    {
+                        bool RetriedWithUbuntuRootfs = false;
+
+                        if (!GeneralHelper.IsLinux && Binary.Architecture == BinaryArchitecture.x64)
+                        {
+                            Utils.PrintHighlight($"[-] The ELF interpreter '{InterpreterPath}' is missing.", true, false, true);
+                            Utils.PrintHighlight("[!] Download and extract Ubuntu Base 26.04 rootfs now? [y/N] ", true, false, true);
+                            string Response = Console.ReadLine();
+                            if (!string.IsNullOrWhiteSpace(Response) && (string.Equals(Response.Trim(), "y", StringComparison.OrdinalIgnoreCase) || string.Equals(Response.Trim(), "yes", StringComparison.OrdinalIgnoreCase)))
+                                RetriedWithUbuntuRootfs = GeneralHelper.IO.EnsureUbuntuBaseRootfs(Binary.Architecture);
+                        }
+
+                        if (RetriedWithUbuntuRootfs)
+                            RetriedWithUbuntuRootfs = TryLoadElfInterpreter(Instance, Binary, InterpreterPath, ref HighestAddress, out StartupEntry, out InterpreterBase);
+
+                        if (!RetriedWithUbuntuRootfs)
+                            throw new InvalidOperationException($"Failed to load the ELF interpreter '{InterpreterPath}'.");
+                    }
                 }
             }
             else
