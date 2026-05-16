@@ -1057,6 +1057,7 @@ namespace Brovan.Core.Emulation.Guests
             RegisterSyscall("lstat64", -1, 196, new Lstat(true));
             RegisterSyscall("fstat64", -1, 197, new Fstat(true));
             RegisterSyscall("fadvise64", 221, 250, new Fadvise64());
+            RegisterSyscall("statfs", 137, 99, new Statfs());
 
             // Process syscalls
             RegisterSyscall("exit", 60, 1, new Exit());
@@ -1083,6 +1084,7 @@ namespace Brovan.Core.Emulation.Guests
             RegisterSyscall("prlimit64", 302, 340, new Prlimit64());
             RegisterSyscall("sched_getaffinity", 204, 242, new Sched_getaffinity());
             RegisterSyscall("clone", 56, 120, new Clone());
+            RegisterSyscall("prctl", 157, 172, new Prctl());
 
             // Misc syscalls
             RegisterSyscall("close", 3, 6, new Close());
@@ -2001,6 +2003,13 @@ namespace Brovan.Core.Emulation.Guests
                 0
             });
 
+            int AuxvStartIndex = 1 + ArgumentPointers.Length + 2;
+            byte[] AuxvBytes = new byte[(Entries.Count - AuxvStartIndex) * sizeof(ulong)];
+            for (int i = AuxvStartIndex; i < Entries.Count; i++)
+                Buffer.BlockCopy(BitConverter.GetBytes(Entries[i]), 0, AuxvBytes, (i - AuxvStartIndex) * sizeof(ulong), sizeof(ulong));
+
+            Helper.AuxiliaryVector = AuxvBytes;
+
             ulong EntryBytes = (ulong)(Entries.Count * sizeof(ulong));
             StackTop -= EntryBytes;
             StackTop &= ~0xFUL;
@@ -2090,6 +2099,13 @@ namespace Brovan.Core.Emulation.Guests
                 0, // AT_NULL
                 0
             });
+
+            int AuxvStartIndex = 1 + ArgumentPointers.Length + 2;
+            byte[] AuxvBytes = new byte[(Entries.Count - AuxvStartIndex) * sizeof(uint)];
+            for (int i = AuxvStartIndex; i < Entries.Count; i++)
+                Buffer.BlockCopy(BitConverter.GetBytes(Entries[i]), 0, AuxvBytes, (i - AuxvStartIndex) * sizeof(uint), sizeof(uint));
+
+            Helper.AuxiliaryVector = AuxvBytes;
 
             ulong EntryBytes = (ulong)(Entries.Count * sizeof(uint));
             StackTop -= EntryBytes;

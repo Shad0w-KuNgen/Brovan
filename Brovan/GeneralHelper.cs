@@ -1195,7 +1195,6 @@ namespace Brovan
 
                             UbuntuRootfsPendingLink PendingLink = new UbuntuRootfsPendingLink
                             {
-                                ArchivePath = NormalizedEntryPath,
                                 EntryPath = HostPath,
                                 LinkName = Entry.LinkName,
                                 EntryType = Entry.EntryType,

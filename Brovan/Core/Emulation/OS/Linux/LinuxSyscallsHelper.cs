@@ -1904,6 +1904,7 @@ namespace Brovan.Core.Emulation.OS.Linux
         public int ProcessGroupId { get; private set; }
         public int SessionId { get; private set; }
         public int CurrentThreadId { get; set; }
+        public byte[] AuxiliaryVector { get; set; } = Array.Empty<byte>();
         public Dictionary<int, LinuxResourceLimit> ResourceLimits { get; private set; }
         public FileDescriptorTable DescriptorTable { get; private set; }
         public Dictionary<string, LinuxMountEntry> MountTable { get; private set; }
