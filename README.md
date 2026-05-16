@@ -14,11 +14,19 @@ Brovan is a C# user-mode binary emulator for inspecting and running x86/x64 prog
 
 It is useful for malware analysis, reverse engineering, debugging binaries, or generally understanding what a program is doing, without executing their instructions directly on the host CPU.
 
-# Preview
+## Preview
 
-<img width="1317" height="528" alt="image" src="https://github.com/user-attachments/assets/d77b4d0a-6715-4e97-ac0b-f37ef23e37bd" />
-<img width="1664" height="1061" alt="image" src="https://github.com/user-attachments/assets/4c264450-e7bd-48ab-85e0-4220ae416c88" />
+Watch a short demo on [YouTube](https://www.youtube.com/watch?v=UPYcqRj9VmI).
 
+<p align="center">
+  <a href="https://youtube.com/example">
+    <img src="https://github.com/user-attachments/assets/d77b4d0a-6715-4e97-ac0b-f37ef23e37bd" alt="Brovan preview 1" />
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/4c264450-e7bd-48ab-85e0-4220ae416c88" alt="Brovan preview 2" />
+</p>
 
 ## Why Brovan?
 
