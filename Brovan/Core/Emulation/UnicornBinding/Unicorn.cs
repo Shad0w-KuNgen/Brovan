@@ -37,7 +37,7 @@ namespace Brovan.Core.Emulation
         private Mode mode;
         private UCErrors _error;
         private List<(ulong, ulong)> Maps = new List<(ulong, ulong)>();
-        private List<IntPtr> Hooks = new List<IntPtr>();
+        private List<IntPtr> HooksList = new List<IntPtr>();
         private readonly object _memoryLock = new object();
         private readonly object _registerLock = new object();
         private readonly object _hooksLock = new object();
@@ -875,10 +875,32 @@ namespace Brovan.Core.Emulation
             _error = uc_hook_add(_uc, out Hook, (int)Emulation.Hooks.UC_HOOK_INSN, ReturnHook, IntPtr.Zero, 1, 0, Instruction);
             if (_error == UCErrors.UC_ERR_OK)
             {
-                Hooks.Add(Hook);
+                HooksList.Add(Hook);
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Make sure that the hook is a whitelisted hook when <see cref="NoHooks"/> are enabled.
+        /// </summary>
+        /// <returns>returns true if the hook is whitelisted, otherwise false.</returns>
+        private static bool IsWhitelistedHookType(Hooks hook)
+        {
+            switch(hook)
+            {
+                case Hooks.UC_HOOK_MEM_FETCH_PROT:
+                case Hooks.UC_HOOK_MEM_FETCH_UNMAPPED:
+                case Hooks.UC_HOOK_MEM_READ_PROT:
+                case Hooks.UC_HOOK_MEM_READ_UNMAPPED:
+                case Hooks.UC_HOOK_MEM_WRITE_PROT:
+                case Hooks.UC_HOOK_MEM_WRITE_UNMAPPED:
+                case Hooks.UC_HOOK_INSN_INVALID:
+                    return true;
+
+                default:
+                    return false;
+            }
         }
 
         /// <summary>
@@ -890,7 +912,7 @@ namespace Brovan.Core.Emulation
         /// <returns>returns true if successful, otherwise false.</returns>
         public bool AddHook(ulong Begin, ulong End, Hooks HookType, IntPtr ReturnHook)
         {
-            if (NoHooks) return true;
+            if (NoHooks &&!IsWhitelistedHookType(HookType)) return true;
             if (DisposedCheck())
                 return false;
 
@@ -898,7 +920,7 @@ namespace Brovan.Core.Emulation
             _error = uc_hook_add(_uc, out Hook, HookType, ReturnHook, IntPtr.Zero, Begin, End);
             if (_error == UCErrors.UC_ERR_OK)
             {
-                Hooks.Add(Hook);
+                HooksList.Add(Hook);
                 return true;
             }
             return false;
@@ -914,7 +936,7 @@ namespace Brovan.Core.Emulation
         /// <returns>Hook handle or <see cref="IntPtr.Zero"/> on failure.</returns>
         public IntPtr AddHookWithHandle(ulong Begin, ulong End, Hooks HookType, IntPtr ReturnHook)
         {
-            if (NoHooks) return IntPtr.Zero;
+            if (NoHooks && !IsWhitelistedHookType(HookType)) return IntPtr.Zero;
             if (DisposedCheck())
                 return IntPtr.Zero;
 
@@ -922,7 +944,7 @@ namespace Brovan.Core.Emulation
             _error = uc_hook_add(_uc, out Hook, HookType, ReturnHook, IntPtr.Zero, Begin, End);
             if (_error == UCErrors.UC_ERR_OK)
             {
-                Hooks.Add(Hook);
+                HooksList.Add(Hook);
                 return Hook;
             }
 
@@ -942,7 +964,7 @@ namespace Brovan.Core.Emulation
             _error = uc_hook_del(_uc, Hook);
             if (_error == UCErrors.UC_ERR_OK)
             {
-                Hooks.Remove(Hook);
+                HooksList.Remove(Hook);
                 return true;
             }
             return false;
@@ -958,11 +980,11 @@ namespace Brovan.Core.Emulation
                 return false;
 
             bool SuccessAll = true;
-            foreach (IntPtr Hook in Hooks)
+            foreach (IntPtr Hook in HooksList)
             {
                 if (uc_hook_del(_uc, Hook) == UCErrors.UC_ERR_OK)
                 {
-                    Hooks.Remove(Hook);
+                    HooksList.Remove(Hook);
                 }
                 else
                 {
@@ -1084,20 +1106,20 @@ namespace Brovan.Core.Emulation
                         List<IntPtr> hooksSnapshot;
                         lock (_hooksLock)
                         {
-                            hooksSnapshot = Hooks.ToList();
+                            hooksSnapshot = HooksList.ToList();
                         }
 
                         foreach (var hook in hooksSnapshot)
                         {
                             try { uc_hook_del(_uc, hook); } catch { }
-                            lock (_hooksLock) { Hooks.Remove(hook); }
+                            lock (_hooksLock) { HooksList.Remove(hook); }
                         }
 
                         try { uc_close(_uc); } catch { }
                         _uc = IntPtr.Zero;
 
                         lock (_mapsLock) { Maps.Clear(); }
-                        lock (_hooksLock) { Hooks.Clear(); }
+                        lock (_hooksLock) { HooksList.Clear(); }
                     }
                 }
                 finally
