@@ -77,14 +77,10 @@ namespace Brovan.Core
         public bool IsDisposed { get; private set; }
         private bool Quick = false;
 
-        private PortableBinarySection[] SortedPESecsByVa;
-        private uint[] SortedPESecsVaStart;
-        private uint[] SortedPESecsVaEnd;
+        private readonly SectionLookupCache<PortableBinarySection> PeSectionCache = new SectionLookupCache<PortableBinarySection>(GetPeSectionVa, GetPeSectionSize);
+        private readonly SectionLookupCache<ElfBinarySection> ElfSectionCache = new SectionLookupCache<ElfBinarySection>(GetElfSectionVa, GetElfSectionSize);
 
         private Dictionary<uint, uint> RvaToFileOffsetCache;
-
-        private bool HasLastPESec;
-        private PortableBinarySection LastPESec;
 
         /// <summary>
         /// Executable Formats Magic Number.
@@ -139,7 +135,7 @@ namespace Brovan.Core
         /// <exception cref="ArgumentOutOfRangeException"></exception>
         public T ReadStruct<T>(ReadOnlySpan<byte> Data, int Offset) where T : unmanaged
         {
-            if (Data == null || Data.Length == 0)
+            if (Data.IsEmpty || Data.Length == 0)
                 throw new ArgumentNullException(nameof(Data), $"The parameter \"{nameof(Data)}\" byte array cannot be null or empty when reading a struct.");
 
             if (Offset < 0)
@@ -450,12 +446,11 @@ namespace Brovan.Core
                     ELF64_SECTION_HEADER StringTableHeader = ReadStruct<ELF64_SECTION_HEADER>(Data, (int)(ElfHeader.e_shoff + ((ulong)ElfHeader.e_shstrndx * (ulong)ElfHeader.e_shentsize)));
                     if (StringTableHeader.sh_size > (ulong)Array.MaxLength || StringTableHeader.sh_size < 0)
                         throw new ArgumentOutOfRangeException(nameof(StringTableHeader.sh_size), "sh_size is out-of-range for a byte array.");
-                    byte[] StringTable = new byte[StringTableHeader.sh_size];
                     int ShOffset = (int)StringTableHeader.sh_offset;
                     long EndPos = ShOffset + (long)StringTableHeader.sh_size;
                     if ((ShOffset > Data.Length) || (ShOffset < 0 || EndPos > Data.Length))
                         throw new IndexOutOfRangeException("sh_offset or size is larger than the binary data length.");
-                    Data.Slice(ShOffset, (int)StringTableHeader.sh_size).CopyTo(StringTable);
+                    ReadOnlySpan<byte> StringTable = Data.Slice(ShOffset, (int)StringTableHeader.sh_size);
                     int SectionHeaderSize = ElfHeader.e_shentsize;
                     long SectionHeadersBase = (long)ElfHeader.e_shoff;
                     for (int i = 0; i < SectionCount; i++)
@@ -470,11 +465,12 @@ namespace Brovan.Core
                             if (NameOffset < 0 || NameOffset >= StringTable.Length)
                                 throw new IndexOutOfRangeException("Section name offset is outside the string-table size.");
 
-                            int EndOffset = NameOffset;
-                            while (EndOffset < StringTable.Length && StringTable[EndOffset] != 0)
-                                EndOffset++;
+                            ReadOnlySpan<byte> NameSlice = StringTable.Slice(NameOffset);
+                            int EndOffset = NameSlice.IndexOf((byte)0);
+                            if (EndOffset < 0)
+                                EndOffset = NameSlice.Length;
 
-                            SectionName = Encoding.ASCII.GetString(StringTable, NameOffset, EndOffset - NameOffset);
+                            SectionName = Encoding.ASCII.GetString(NameSlice.Slice(0, EndOffset));
                         }
 
                         ELF.Sections[i] = new ElfBinarySection
@@ -529,12 +525,11 @@ namespace Brovan.Core
                     ELF32_SECTION_HEADER StringTableHeader = ReadStruct<ELF32_SECTION_HEADER>(Data, (int)(ElfHeader.e_shoff + (ElfHeader.e_shstrndx * ElfHeader.e_shentsize)));
                     if (StringTableHeader.sh_size > Array.MaxLength || StringTableHeader.sh_size < 0)
                         throw new OverflowException("sh_size is out-of-range for a byte array.");
-                    byte[] StringTable = new byte[StringTableHeader.sh_size];
                     int ShOffset = (int)StringTableHeader.sh_offset;
                     long EndPos = ShOffset + StringTableHeader.sh_size;
                     if ((ShOffset > Data.Length) || (ShOffset < 0 || EndPos > Data.Length))
                         throw new IndexOutOfRangeException("sh_offset or size is larger than the binary data length.");
-                    Data.Slice(ShOffset, (int)StringTableHeader.sh_size).CopyTo(StringTable);
+                    ReadOnlySpan<byte> StringTable = Data.Slice(ShOffset, (int)StringTableHeader.sh_size);
                     int SectionHeaderSize = ElfHeader.e_shentsize;
                     int SectionHeadersBase = (int)ElfHeader.e_shoff;
 
@@ -551,11 +546,12 @@ namespace Brovan.Core
                             if (NameOffset < 0 || NameOffset >= StringTable.Length)
                                 throw new IndexOutOfRangeException("Section name offset is outside the string-table size.");
 
-                            int EndOffset = NameOffset;
-                            while (EndOffset < StringTable.Length && StringTable[EndOffset] != 0)
-                                EndOffset++;
+                            ReadOnlySpan<byte> NameSlice = StringTable.Slice(NameOffset);
+                            int EndOffset = NameSlice.IndexOf((byte)0);
+                            if (EndOffset < 0)
+                                EndOffset = NameSlice.Length;
 
-                            SectionName = Encoding.ASCII.GetString(StringTable, NameOffset, EndOffset - NameOffset);
+                            SectionName = Encoding.ASCII.GetString(NameSlice.Slice(0, EndOffset));
                         }
 
                         ELF.Sections[i] = new ElfBinarySection
@@ -569,6 +565,8 @@ namespace Brovan.Core
                         };
                     }
                 }
+
+                BuildELFSectionLookupCache();
 
                 // Parse functions and imports
                 ParseELFFunctions();
@@ -866,24 +864,133 @@ namespace Brovan.Core
             return false;
         }
 
-        /// <summary>
-        /// Compare two PE sections by their virtual address for sorting.
-        /// </summary>
-        /// <param name="A">First section.</param>
-        /// <param name="B">Second section.</param>
-        /// <returns>
-        /// A negative value if <paramref name="A"/> should come before <paramref name="B"/>, a positive value if it should come after,
-        /// or zero if they have the same virtual address.
-        /// </returns>
-        private static int CompareSectionByVirtualAddress(PortableBinarySection A, PortableBinarySection B)
+        private static uint GetPeSectionVa(PortableBinarySection Section) => Section.VirtualAddress;
+
+        private static uint GetPeSectionSize(PortableBinarySection Section)
         {
-            if (A.VirtualAddress < B.VirtualAddress)
-                return -1;
+            uint Size = Section.VirtualSize;
+            return Size == 0 ? Section.RawSize : Size;
+        }
 
-            if (A.VirtualAddress > B.VirtualAddress)
-                return 1;
+        private static uint GetElfSectionVa(ElfBinarySection Section) => Section.VirtualAddress;
 
-            return 0;
+        private static uint GetElfSectionSize(ElfBinarySection Section) => Section.VirtualSize;
+
+        private sealed class SectionLookupCache<TSection> where TSection : struct
+        {
+            private readonly Func<TSection, uint> GetVa;
+            private readonly Func<TSection, uint> GetSize;
+
+            private TSection[]? SortedByVa;
+            private uint[]? VaStart;
+            private uint[]? VaEnd;
+            private bool HasLast;
+            private TSection Last;
+
+            public SectionLookupCache(Func<TSection, uint> GetVa, Func<TSection, uint> GetSize)
+            {
+                this.GetVa = GetVa ?? throw new ArgumentNullException(nameof(GetVa));
+                this.GetSize = GetSize ?? throw new ArgumentNullException(nameof(GetSize));
+            }
+
+            public void Build(TSection[] Sections)
+            {
+                if (Sections == null || Sections.Length == 0)
+                {
+                    SortedByVa = null;
+                    VaStart = null;
+                    VaEnd = null;
+                    HasLast = false;
+                    return;
+                }
+
+                SortedByVa = (TSection[])Sections.Clone();
+                Array.Sort(SortedByVa, (Left, Right) =>
+                {
+                    uint LeftVa = GetVa(Left);
+                    uint RightVa = GetVa(Right);
+
+                    if (LeftVa < RightVa)
+                        return -1;
+
+                    if (LeftVa > RightVa)
+                        return 1;
+
+                    return 0;
+                });
+
+                int Count = SortedByVa.Length;
+
+                VaStart = new uint[Count];
+                VaEnd = new uint[Count];
+
+                for (int i = 0; i < Count; i++)
+                {
+                    TSection Section = SortedByVa[i];
+                    uint Va = GetVa(Section);
+                    uint Size = GetSize(Section);
+
+                    VaStart[i] = Va;
+                    VaEnd[i] = Va + Size;
+                }
+
+                HasLast = false;
+            }
+
+            public bool TryFindByVa(ulong VirtualAddress, out TSection Section)
+            {
+                Section = default;
+
+                if (SortedByVa == null || VaStart == null || VaEnd == null)
+                    return false;
+
+                if (VirtualAddress > uint.MaxValue)
+                    return false;
+
+                uint Va = (uint)VirtualAddress;
+
+                if (HasLast)
+                {
+                    uint Start = GetVa(Last);
+                    uint End = Start + GetSize(Last);
+
+                    if (Va >= Start && Va < End)
+                    {
+                        Section = Last;
+                        return true;
+                    }
+                }
+
+                int Lo = 0;
+                int Hi = SortedByVa.Length - 1;
+
+                while (Lo <= Hi)
+                {
+                    int Mid = Lo + ((Hi - Lo) >> 1);
+
+                    uint Start = VaStart[Mid];
+                    uint End = VaEnd[Mid];
+
+                    if (Va < Start)
+                    {
+                        Hi = Mid - 1;
+                        continue;
+                    }
+
+                    if (Va >= End)
+                    {
+                        Lo = Mid + 1;
+                        continue;
+                    }
+
+                    Section = SortedByVa[Mid];
+                    HasLast = true;
+                    Last = Section;
+                    return true;
+                }
+
+                return false;
+            }
         }
 
         /// <summary>
@@ -895,30 +1002,19 @@ namespace Brovan.Core
             if (PE.Sections == null || PE.Sections.Length == 0)
                 return;
 
-            SortedPESecsByVa = (PortableBinarySection[])PE.Sections.Clone();
-            Array.Sort(SortedPESecsByVa, CompareSectionByVirtualAddress);
-
-            int Count = SortedPESecsByVa.Length;
-
-            SortedPESecsVaStart = new uint[Count];
-            SortedPESecsVaEnd = new uint[Count];
-
-            for (int i = 0; i < Count; i++)
-            {
-                PortableBinarySection Sec = SortedPESecsByVa[i];
-
-                uint Va = Sec.VirtualAddress;
-                uint Size = Sec.VirtualSize;
-
-                if (Size == 0)
-                    Size = Sec.RawSize;
-
-                SortedPESecsVaStart[i] = Va;
-                SortedPESecsVaEnd[i] = Va + Size;
-            }
-
+            PeSectionCache.Build(PE.Sections);
             RvaToFileOffsetCache = new Dictionary<uint, uint>(4096);
-            HasLastPESec = false;
+        }
+
+        /// <summary>
+        /// Builds internal lookup structures for ELF sections, enabling fast resolution of VAs to sections.
+        /// </summary>
+        private void BuildELFSectionLookupCache()
+        {
+            if (ELF.Sections == null || ELF.Sections.Length == 0)
+                return;
+
+            ElfSectionCache.Build(ELF.Sections);
         }
 
         /// <summary>
@@ -929,38 +1025,7 @@ namespace Brovan.Core
         /// <returns>returns true if the RVA maps to a section, otherwise false.</returns>
         private bool TryFindPESectionByRva(uint Rva, out PortableBinarySection Section)
         {
-            Section = default;
-
-            if (SortedPESecsByVa == null)
-                return false;
-
-            int Lo = 0;
-            int Hi = SortedPESecsByVa.Length - 1;
-
-            while (Lo <= Hi)
-            {
-                int Mid = Lo + ((Hi - Lo) >> 1);
-
-                uint Start = SortedPESecsVaStart[Mid];
-                uint End = SortedPESecsVaEnd[Mid];
-
-                if (Rva < Start)
-                {
-                    Hi = Mid - 1;
-                    continue;
-                }
-
-                if (Rva >= End)
-                {
-                    Lo = Mid + 1;
-                    continue;
-                }
-
-                Section = SortedPESecsByVa[Mid];
-                return true;
-            }
-
-            return false;
+            return PeSectionCache.TryFindByVa(Rva, out Section);
         }
 
         /// <summary>
@@ -971,29 +1036,15 @@ namespace Brovan.Core
         /// <returns>returns true if the RVA maps to a section, otherwise false.</returns>
         private bool TryFindPESectionByRvaFast(uint Rva, out PortableBinarySection Section)
         {
-            if (HasLastPESec)
-            {
-                uint Start = LastPESec.VirtualAddress;
-                uint Size = LastPESec.VirtualSize;
+            return PeSectionCache.TryFindByVa(Rva, out Section);
+        }
 
-                if (Size == 0)
-                    Size = LastPESec.RawSize;
-
-                uint End = Start + Size;
-
-                if (Rva >= Start && Rva < End)
-                {
-                    Section = LastPESec;
-                    return true;
-                }
-            }
-
-            if (!TryFindPESectionByRva(Rva, out Section))
-                return false;
-
-            HasLastPESec = true;
-            LastPESec = Section;
-            return true;
+        /// <summary>
+        /// Try to locate the ELF section that contains the specified virtual address using a small cache for sequential access.
+        /// </summary>
+        private bool TryFindELFSectionByVaFast(ulong VirtualAddress, out ElfBinarySection Section)
+        {
+            return ElfSectionCache.TryFindByVa(VirtualAddress, out Section);
         }
 
         /// <summary>
@@ -2133,11 +2184,7 @@ namespace Brovan.Core
 
             ulong EntryPoint = Architecture == BinaryArchitecture.x64 ? ReadStruct<ELF64_HEADER>(DataSpan, 0).e_entry : ReadStruct<ELF32_HEADER>(DataSpan, 0).e_entry;
 
-            ElfBinarySection EntrySection = ELF.Sections.FirstOrDefault(s =>
-                EntryPoint >= s.VirtualAddress &&
-                EntryPoint < s.VirtualAddress + s.VirtualSize);
-
-            if (EntrySection.SectionName != null)
+            if (TryFindELFSectionByVaFast(EntryPoint, out ElfBinarySection EntrySection) && EntrySection.SectionName != null)
             {
                 uint EntryOffset = EntrySection.RawOffset + (uint)(EntryPoint - EntrySection.VirtualAddress);
                 uint EndOffset = FindFunctionEnd(EntryOffset);
@@ -2192,11 +2239,7 @@ namespace Brovan.Core
                     if (SymbolInfo != 0x12 || SymbolName == 0)
                         continue;
 
-                    ElfBinarySection SymbolSection = ELF.Sections.FirstOrDefault(s =>
-                        SymbolValue >= s.VirtualAddress &&
-                        SymbolValue < s.VirtualAddress + s.VirtualSize);
-
-                    if (SymbolSection.SectionName == null)
+                    if (!TryFindELFSectionByVaFast(SymbolValue, out ElfBinarySection SymbolSection) || SymbolSection.SectionName == null)
                         continue;
 
                     uint FileOffset = SymbolSection.RawOffset + (uint)(SymbolValue - SymbolSection.VirtualAddress);
@@ -2253,7 +2296,6 @@ namespace Brovan.Core
                 return;
 
             // Read dynamic string table
-            byte[] DynStr = new byte[DynStrSection.RawSize];
             if (DynStrSection.RawOffset > Data.Length || DynStrSection.RawSize < 0)
                 throw new IndexOutOfRangeException("Invalid .dynstr data.");
 
@@ -2269,15 +2311,12 @@ namespace Brovan.Core
             if (BytesToCopy > MaxReadable)
                 BytesToCopy = MaxReadable;
 
-            if (BytesToCopy > DynStr.Length)
-                throw new ArgumentException("Destination buffer is too small.", nameof(DynStr));
-
-            DataSpan.Slice(RawOffset, BytesToCopy).CopyTo(DynStr);
+            ReadOnlySpan<byte> DynStr = DataSpan.Slice(RawOffset, BytesToCopy);
 
             // Create a map of symbol index to name
-            Dictionary<uint, string> SymbolNames = new();
             int SymbolSize = Is64Bit ? 24 : 16; // if 64-bit arch, set to 24 (Elf64_Sym) and if not then use 16 (Elf32_Sym)
             int SymbolCount = (int)(DynSymSection.RawSize / SymbolSize);
+            Dictionary<uint, string> SymbolNames = new Dictionary<uint, string>(SymbolCount);
 
             for (int i = 0; i < SymbolCount; i++)
             {
@@ -2286,10 +2325,11 @@ namespace Brovan.Core
                     ELF64_SYMBOL Symbol = ReadStruct<ELF64_SYMBOL>(DataSpan, (int)DynSymSection.RawOffset + i * SymbolSize);
                     if (Symbol.st_name != 0)
                     {
-                        int EndOff = Array.IndexOf(DynStr, (byte)0, (int)Symbol.st_name);
+                        ReadOnlySpan<byte> NameSlice = DynStr.Slice((int)Symbol.st_name);
+                        int EndOff = NameSlice.IndexOf((byte)0);
                         if (EndOff != -1)
                         {
-                            string Name = Encoding.ASCII.GetString(DynStr, (int)Symbol.st_name, EndOff - (int)Symbol.st_name);
+                            string Name = Encoding.ASCII.GetString(NameSlice.Slice(0, EndOff));
                             SymbolNames[(uint)i] = Name;
                         }
                     }
@@ -2299,10 +2339,11 @@ namespace Brovan.Core
                     ELF32_SYMBOL Symbol = ReadStruct<ELF32_SYMBOL>(DataSpan, (int)DynSymSection.RawOffset + i * SymbolSize);
                     if (Symbol.st_name != 0)
                     {
-                        int EndOff = Array.IndexOf(DynStr, (byte)0, (int)Symbol.st_name);
+                        ReadOnlySpan<byte> NameSlice = DynStr.Slice((int)Symbol.st_name);
+                        int EndOff = NameSlice.IndexOf((byte)0);
                         if (EndOff != -1)
                         {
-                            string Name = Encoding.ASCII.GetString(DynStr, (int)Symbol.st_name, EndOff - (int)Symbol.st_name);
+                            string Name = Encoding.ASCII.GetString(NameSlice.Slice(0, EndOff));
                             SymbolNames[(uint)i] = Name;
                         }
                     }
@@ -2672,7 +2713,6 @@ namespace Brovan.Core
             this.Quick = Quick;
             ParseBinary(Data.AsSpan());
             this.Location = Path.GetFullPath(BinaryPath);
-            this.SortedPESecsByVa = null;
             this.RvaToFileOffsetCache?.Clear();
             this.RvaToFileOffsetCache = null;
         }
