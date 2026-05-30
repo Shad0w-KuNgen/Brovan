@@ -10,158 +10,61 @@
 
 </div>
 
-Brovan is a C# user-mode binary emulator for inspecting and running x86/x64 programs in a controlled emulated environment. It supports PE, ELF, memory dumps, and raw files with no recognized file format.
+Brovan is a powerful user-mode binary emulator for inspecting and running x86_64 programs in a controlled emulated environment. It supports PE, ELF, memory dumps, and even raw files with no recognized file format.
 
-It is useful for malware analysis, reverse engineering, debugging binaries, or generally understanding what a program is doing, without executing their instructions directly on the host CPU.
+It is a tool used to analyze binaries in an interactive way and discovering what functions they are trying to access, what they are doing, and fully controlling the program inside the emulator. it is useful for malware analysis, reverse engineering, debugging binaries, or generally understanding what a program is doing, without executing their instructions directly on the host CPU.
 
 ## Preview
 
-Watch a short demo on [YouTube](https://www.youtube.com/watch?v=UPYcqRj9VmI).
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <a href="https://github.com/user-attachments/assets/d77b4d0a-6715-4e97-ac0b-f37ef23e37bd">
+          <img src="https://github.com/user-attachments/assets/d77b4d0a-6715-4e97-ac0b-f37ef23e37bd" alt="Brovan preview 1" height="260" />
+        </a>
+      </td>
+      <td align="center">
+        <a href="https://github.com/user-attachments/assets/4c264450-e7bd-48ab-85e0-4220ae416c88">
+          <img src="https://github.com/user-attachments/assets/4c264450-e7bd-48ab-85e0-4220ae416c88" alt="Brovan preview 2" height="260" />
+        </a>
+      </td>
+      <td align="center">
+        <a href="https://github.com/user-attachments/assets/a3f41dda-fe36-48a9-9ea2-f02b24235d7d">
+          <img src="https://github.com/user-attachments/assets/a3f41dda-fe36-48a9-9ea2-f02b24235d7d" alt="Brovan preview 3" height="260" />
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="3" align="center">
+        <a href="https://github.com/user-attachments/assets/d0932ff6-08cf-49e5-a48d-70c577352152">
+          <img src="https://github.com/user-attachments/assets/d0932ff6-08cf-49e5-a48d-70c577352152" alt="Brovan preview 4" height="220" />
+        </a>
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://github.com/user-attachments/assets/8bea785c-8f29-4261-8450-97e6b9dd7622">
+          <img src="https://github.com/user-attachments/assets/8bea785c-8f29-4261-8450-97e6b9dd7622" alt="Brovan preview 5" height="220" />
+        </a>
+      </td>
+    </tr>
+  </table>
+</div>
 
-<p align="center">
-  <a href="https://youtube.com/example">
-    <img src="https://github.com/user-attachments/assets/d77b4d0a-6715-4e97-ac0b-f37ef23e37bd" alt="Brovan preview 1" />
-  </a>
-</p>
+## Documentation
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/4c264450-e7bd-48ab-85e0-4220ae416c88" alt="Brovan preview 2" />
-</p>
+The wiki is the main source for:
 
-## Why Brovan?
+- Build instructions
+- Architecture overview
+- Usage guide
+- Command reference
 
-Brovan gives you a hands-on way to load a binary, observe what it does, and fully control execution from an interactive shell.
+See the wiki here: https://github.com/AdvDebug/Brovan/wiki
 
-You can use it to:
-
-* analyze suspicious Windows binaries
-* inspect PE headers, sections, imports, exports, functions, and strings
-* step through emulated code instruction by instruction
-* trace syscall behavior
-* monitor function calls
-* inspect and patch memory
-* set breakpoints and watchpoints
-* snapshot emulator state and restore it later
-* test how binaries interact with files, registry state, memory, threads, networking, and other user-mode objects
-* Fully control the process, even file descriptor for linux or handles for windows can be fully controlled, duplicated, or it's properties modified directly from the emulation menu.
-
-## What Brovan offers
-
-* PE, ELF, and .NET binary parsing support
-* Windows user-mode PE emulation (x86 isn't currently supported for windows)
-* Linux/ELF guest support for common syscall flows
-* syscall modeling for many Windows user-mode paths and linux user paths, but more will be worked on
-* generic raw binary/blob loading with the guest of your choice
-* interactive debugger-style command shell
-* memory regions, hexdumps, disassembly, and string search
-* breakpoints and read/write/fetch watchpoints
-* snapshots and restore support
-* syscall tracing and syscall rules to set custom behavior for syscalls (or even add unsupported ones yourself without adding it directly to the code, but to a certain limit)
-* function monitoring with argument decoding
-* configurable host networking policy for emulated networking devices
-
-## Requirements for builds
-
-* .NET 8 SDK
-* x64 runtime environment
-* `unicorn.dll`/`libunicorn.so` available under `Resources/`
-* Windows is recommended for the primary Windows PE emulation workflow
-
-Visual Studio Build Tools are useful on Windows because Brovan can use `editbin` when available because it disables CFG, as unicorn wouldn't work without it because of how the JIT works.
-
-If Brovan detected that Control Flow Guard are still running, it will automatically restart the process with CFG disabled, so even if you don't have the `editbin` you are still good.
-
-## Build
-
-```bash
-dotnet build -c Release
-```
-
-The release output is created under:
-
-```text
-bin/Release/net8.0/
-```
-
-## Usage
-
-```bash
-Brovan [options] <path-to-binary> [program arguments...]
-```
-
-Examples:
-
-```bash
-Brovan sample.elf
-Brovan --quick sample.exe
-Brovan --quick -c "start;run" sample.exe
-Brovan --net=none sample.elf
-```
-
-Brovan options must come before the target binary path. Anything after the binary path is passed to the emulated program.
-
-## CLI options
-
-| Option             | Description                                                                |
-| ------------------ | -------------------------------------------------------------------------- |
-| `-q`, `--quick`    | Start faster and use less memory by skipping deeper static analysis.       |
-| `-s`, `--silent`   | Only show stdout from the emulated program.                                |
-| `-c`, `--command`  | Run interactive commands automatically, separated by `;`.                  |
-| `--net <mode>`     | Set networking policy: `none`, `loopback`, or `full`. Default: `loopback`. |
-| `--net-allow <ip>` | Allow a specific IPv4 or IPv6 address.                                     |
-| `-h`, `--help`     | Show help.                                                                 |
-
-## Interactive shell
-
-Brovan includes an interactive debugger-style shell for controlling execution and inspecting state.
-
-Some common (but not all) commands include:
-
-| Command                    | Description                          |
-| -------------------------- | ------------------------------------ |
-| `start`                    | Initialize the emulator.             |
-| `run`                      | Run execution through the scheduler. |
-| `continue` / `c`           | Resume execution.                    |
-| `step`                     | Execute one instruction.             |
-| `stepover`                 | Step over a call instruction.        |
-| `dumpregs`                 | Show register state.                 |
-| `hexdump <address> <size>` | Dump memory.                         |
-| `disasm <address> <size>`  | Disassemble memory.                  |
-| `regions`                  | List mapped memory regions.          |
-| `modules`                  | List loaded modules.                 |
-| `findstr`                  | Search memory for strings.           |
-| `bp`                       | Manage breakpoints.                  |
-| `watch`                    | Manage watchpoints.                  |
-| `snap` / `restore`         | Save or restore emulator state.      |
-| `bininfo`                  | Show parsed binary information.      |
-| `syscall`                  | Trace or control syscall behavior.   |
-| `funcmon`                  | Monitor function calls.              |
-| `help [command]`           | Show help.                           |
-
-Example:
-
-```bash
-Brovan --quick -c "start;showinstrs;run" sample.exe
-```
-
-## Malware analysis note
-
-Brovan can help analyze malware and suspicious binaries by emulating user-mode execution and exposing runtime behavior. It is still important to handle unknown files carefully.
-
-Brovan is not a replacement for a properly isolated malware lab or VM. Treat samples as hostile and use normal reverse-engineering precautions.
-
-Brovan does not let the emulated program directly write to the real host filesystem, Guest-side writes are redirected into Brovan's virtual filesystem model instead.
-
-But reads are different, if the guest binary and host environment are compatible, Brovan exposes the host files for read-only as it is required to run the program in the most compatible state, the program might need stuff such as windows libraries and other runtime files needed for emulation, which might expose you to data exfiltration malware, such as info stealers. However, this happens only if the binary and the host OS is compatible. if not, file access generally falls back to Brovan's virtual filesystem model instead for both read and writes.
-
-Network access is controlled by policy. The default mode is `loopback`, but running with `--net=full` allows full network behavior with no restrictions. For malware, that can include data exfiltration if the sample reaches supported network devices implemented by the emulator. Use `--net=none` when analyzing unknown samples unless network behavior is intentionally being studied.
-
-# Dependencies used
+# Credits
 Thanks to <a href="https://github.com/icedland/iced">Iced library</a> for x86_64 disassembly and assembly.
 
 Thanks to <a href="https://github.com/unicorn-engine/unicorn">Unicorn Engine</a> for the core emulator.
 
-# Credits
 Thanks to my friend <a href="https://github.com/GittingHubbers">GittingHubbers</a> for help with the MLFQ Scheduler.
 
 # License
