@@ -79,6 +79,7 @@ namespace Brovan.EmulationMenu
 
         private static readonly Dictionary<string, CommandHelpEntry> CommandHelpLookup = BuildCommandHelpLookup();
         private static bool CancelKeyPressRegistered;
+        private static volatile bool Exiting;
 
         private static Dictionary<string, CommandHelpEntry> BuildCommandHelpLookup()
         {
@@ -1055,7 +1056,10 @@ namespace Brovan.EmulationMenu
             Console.CancelKeyPress += (sender, e) =>
             {
                 e.Cancel = true;
+                Exiting = true;
+                Console.ResetColor();
                 Console.ForegroundColor = ConsoleColor.White;
+                Console.BackgroundColor = ConsoleColor.Black;
                 Environment.Exit(0);
             };
             CancelKeyPressRegistered = true;
@@ -2445,6 +2449,9 @@ namespace Brovan.EmulationMenu
 
                 while (true)
                 {
+                    if (Exiting)
+                        break;
+
                     string Input;
                     if (DebuggerStopDisplayActive)
                     {
@@ -2462,7 +2469,9 @@ namespace Brovan.EmulationMenu
                         }
 
                         Console.ForegroundColor = ConsoleColor.Cyan;
-                        Console.Write("Brovan Emulator > ");
+                        Console.Write("emu@brovan ");
+                        Console.ForegroundColor = ConsoleColor.DarkMagenta;
+                        Console.Write("> ");
                         Console.ForegroundColor = ConsoleColor.White;
                         Input = Console.ReadLine()?.Trim();
                     }
