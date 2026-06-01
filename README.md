@@ -119,6 +119,8 @@ The wiki is the main source for:
 
 See the wiki here: https://github.com/AdvDebug/Brovan/wiki
 
+You can also view the FAQ <a href="https://github.com/AdvDebug/Brovan/blob/main/FAQ.md">here</a>.
+
 > [!WARNING]
 > The [Releases](https://github.com/AdvDebug/Brovan/releases) page may not always have the latest changes.  
 > For the most up-to-date version, **[build from source](https://github.com/AdvDebug/Brovan/wiki/Building-Brovan)** instead
