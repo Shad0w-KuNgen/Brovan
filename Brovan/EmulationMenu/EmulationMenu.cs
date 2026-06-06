@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Brovan.Core;
 using static Brovan.Core.Helpers.Utils;
 using static Brovan.Core.Helpers.BinaryHelpers;
@@ -18,16 +18,27 @@ namespace Brovan.EmulationMenu
 {
     internal class EmulationMenu
     {
+        private enum CommandHelpType
+        {
+            Core,
+            Debug,
+            Memory,
+            Analysis,
+            Network,
+        }
+
         private sealed class CommandHelpEntry
         {
-            public CommandHelpEntry(string name, string usage, string description, params string[] aliases)
+            public CommandHelpEntry(CommandHelpType type, string name, string usage, string description, params string[] aliases)
             {
+                Type = type;
                 Name = name;
                 Usage = usage;
                 Description = description;
                 Aliases = aliases ?? Array.Empty<string>();
             }
 
+            public CommandHelpType Type { get; }
             public string Name { get; }
             public string Usage { get; }
             public string Description { get; }
@@ -36,45 +47,45 @@ namespace Brovan.EmulationMenu
 
         private static readonly CommandHelpEntry[] CommandHelpEntries =
         {
-            new CommandHelpEntry("help", "help [command]", "Show available commands or details for one command.", "?", "commands"),
-            new CommandHelpEntry("start", "start", "Initialize the emulator instance."),
-            new CommandHelpEntry("run", "run", "Run the current thread using the scheduler."),
-            new CommandHelpEntry("continue", "continue", "Resume emulation from the current instruction pointer.", "c", "cont"),
-            new CommandHelpEntry("clear", "clear", "Clear the console output.", "cls"),
-            new CommandHelpEntry("exit", "exit", "Exit the emulator.", "quit"),
-            new CommandHelpEntry("showinstrs", "showinstrs [module_name|start-end]", "Enable instruction tracing (optionally filter)."),
-            new CommandHelpEntry("hideinstrs", "hideinstrs", "Disable instruction tracing."),
-            new CommandHelpEntry("bp", "bp <add|del|list|clear>", "Manage breakpoints (supports conditional).", "break"),
-            new CommandHelpEntry("watch", "watch <add|del|list|clear>", "Manage read/write/fetch watchpoints.", "wp"),
-            new CommandHelpEntry("step", "step", "Execute a single instruction."),
-            new CommandHelpEntry("stepover", "stepover", "Step over a call instruction."),
-            new CommandHelpEntry("dumpconsole", "dumpconsole", "Dump the current console output."),
-            new CommandHelpEntry("dumpregs", "dumpregs", "Print register state."),
-            new CommandHelpEntry("threads", "threads <list|info|switch|suspend|resume|kill|priority|rename|regs>", "Inspect and control emulated threads.", "thread", "t"),
-            new CommandHelpEntry("handles", "handles <list|info|refs|inspect|close|flags|access|target|dup|set|setraw>", "Inspect and edit Windows handles or Linux file descriptors.", "handle", "fds", "fd"),
-            new CommandHelpEntry("snap", "snap", "Take an emulator snapshot."),
-            new CommandHelpEntry("restore", "restore", "Restore the last snapshot."),
-            new CommandHelpEntry("set", "set <register> <value>", "Set a register value."),
-            new CommandHelpEntry("get", "get <register>", "Read a register value."),
-            new CommandHelpEntry("modules", "modules", "List loaded modules."),
-            new CommandHelpEntry("hexdump", "hexdump <address> <size>", "Dump memory as hex and ASCII."),
-            new CommandHelpEntry("disasm", "disasm <address> <size>", "Disassemble memory at the given address."),
-            new CommandHelpEntry("debug", "debug", "Toggle debug mode."),
-            new CommandHelpEntry("memwrite", "memwrite <addr> <hex-bytes|file_path>", "Write bytes or assembled instruction bytes."),
-            new CommandHelpEntry("gpatch", "gpatch <addr> <hex-bytes|file_path>", "Apply a ghost patch. modifies bytes in memory but upon reading it by the program it reads the original bytes."),
-            new CommandHelpEntry("parse_struct", "parse_struct <address> <struct_name>", "Parse and display a Windows structure."),
-            new CommandHelpEntry("findstr", "findstr <text> [ascii|utf16] [max-results]", "Find ASCII/UTF-16 strings in mapped memory."),
-            new CommandHelpEntry("write_struct", "write_struct [address] <struct_name> <field=value&...>", "Write a Windows structure to memory."),
-            new CommandHelpEntry("regions", "regions", "List mapped memory regions."),
-            new CommandHelpEntry("map", "map <address> <size>", "Map memory at an address (use 0 for auto)."),
-            new CommandHelpEntry("bininfo", "bininfo [summary|functions|exports|imports|sections|dotnet]", "Show parsed binary metadata (disabled in quick mode).", "binaryinfo"),
-            new CommandHelpEntry("syscall", "syscall <list|last|failed|tid|name|contains|export|clear|trace|rule|rules>", "Inspect syscall history while trace is enabled and manage syscall behavior/rules.", "syscalls"),
-            new CommandHelpEntry("calltrace", "calltrace <on|off|clear|list|depth>", "Trace call/ret instructions and maintain a lightweight call stack.", "ct"),
-            new CommandHelpEntry("callstack", "callstack [thread_id] [max_frames]", "Show the traced call stack for a thread.", "bt"),
-            new CommandHelpEntry("funcmon", "funcmon <address|symbol> [cc] [arg_types...]", "Monitor function enter/leave with parameters."),
-            new CommandHelpEntry("ldrplog", "ldrplog <address>|off|once", "Decode internal ntdll loader log calls."),
-            new CommandHelpEntry("checkprot", "checkprot <address>", "Show memory protection for an address."),
-            new CommandHelpEntry("pcap", "pcap <on|off|status> [path]", "Dump emulated network traffic to a pcap file.", "netdump", "capture")
+            new CommandHelpEntry(CommandHelpType.Core, "help", "help [command]", "Show available commands or details for one command.", "?", "commands"),
+            new CommandHelpEntry(CommandHelpType.Core, "start", "start", "Initialize the emulator instance."),
+            new CommandHelpEntry(CommandHelpType.Core, "run", "run", "Run the current thread using the scheduler."),
+            new CommandHelpEntry(CommandHelpType.Core, "continue", "continue", "Resume emulation from the current instruction pointer.", "c", "cont"),
+            new CommandHelpEntry(CommandHelpType.Core, "clear", "clear", "Clear the console output.", "cls"),
+            new CommandHelpEntry(CommandHelpType.Core, "exit", "exit", "Exit the emulator.", "quit"),
+            new CommandHelpEntry(CommandHelpType.Debug, "showinstrs", "showinstrs [module_name|start-end]", "Enable instruction tracing (optionally filter)."),
+            new CommandHelpEntry(CommandHelpType.Debug, "step", "step", "Execute a single instruction."),
+            new CommandHelpEntry(CommandHelpType.Debug, "stepover", "stepover", "Step over a call instruction."),
+            new CommandHelpEntry(CommandHelpType.Debug, "debug", "debug", "Toggle debug mode."),
+            new CommandHelpEntry(CommandHelpType.Debug, "hideinstrs", "hideinstrs", "Disable instruction tracing."),
+            new CommandHelpEntry(CommandHelpType.Debug, "bp", "bp <add|del|list|clear>", "Manage breakpoints (supports conditional).", "break"),
+            new CommandHelpEntry(CommandHelpType.Debug, "watch", "watch <add|del|list|clear>", "Manage read/write/fetch watchpoints.", "wp"),
+            new CommandHelpEntry(CommandHelpType.Debug, "threads", "threads <list|info|switch|suspend|resume|kill|priority|rename|regs>", "Inspect and control emulated threads.", "thread", "t"),
+            new CommandHelpEntry(CommandHelpType.Debug, "handles", "handles <list|info|refs|inspect|close|flags|access|target|dup|set|setraw>", "Inspect and edit Windows handles or Linux file descriptors.", "handle", "fds", "fd"),
+            new CommandHelpEntry(CommandHelpType.Debug, "snap", "snap", "Take an emulator snapshot."),
+            new CommandHelpEntry(CommandHelpType.Debug, "restore", "restore", "Restore the last snapshot."),
+            new CommandHelpEntry(CommandHelpType.Debug, "set", "set <register> <value>", "Set a register value."),
+            new CommandHelpEntry(CommandHelpType.Debug, "get", "get <register>", "Read a register value."),
+            new CommandHelpEntry(CommandHelpType.Debug, "dumpregs", "dumpregs", "Print register state."),
+            new CommandHelpEntry(CommandHelpType.Memory, "dumpconsole", "dumpconsole", "Dump the current console output."),
+            new CommandHelpEntry(CommandHelpType.Memory, "hexdump", "hexdump <address> <size>", "Dump memory as hex and ASCII."),
+            new CommandHelpEntry(CommandHelpType.Memory, "disasm", "disasm <address> <size>", "Disassemble memory at the given address."),
+            new CommandHelpEntry(CommandHelpType.Memory, "memwrite", "memwrite <addr> <hex-bytes|file_path>", "Write bytes or assembled instruction bytes."),
+            new CommandHelpEntry(CommandHelpType.Memory, "gpatch", "gpatch <addr> <hex-bytes|file_path>", "Apply a ghost patch. modifies bytes in memory but upon reading it by the program it reads the original bytes."),
+            new CommandHelpEntry(CommandHelpType.Memory, "parse_struct", "parse_struct <address> <struct_name>", "Parse and display a Windows structure."),
+            new CommandHelpEntry(CommandHelpType.Memory, "write_struct", "write_struct [address] <struct_name> <field=value&...>", "Write a Windows structure to memory."),
+            new CommandHelpEntry(CommandHelpType.Memory, "regions", "regions", "List mapped memory regions."),
+            new CommandHelpEntry(CommandHelpType.Memory, "map", "map <address> <size>", "Map memory at an address (use 0 for auto)."),
+            new CommandHelpEntry(CommandHelpType.Memory, "checkprot", "checkprot <address>", "Show memory protection for an address."),
+            new CommandHelpEntry(CommandHelpType.Memory, "findstr", "findstr <text> [ascii|utf16] [max-results]", "Find ASCII/UTF-16 strings in mapped memory."),
+            new CommandHelpEntry(CommandHelpType.Analysis, "modules", "modules", "List loaded modules."),
+            new CommandHelpEntry(CommandHelpType.Analysis, "bininfo", "bininfo [summary|functions|exports|imports|sections|dotnet]", "Show parsed binary metadata (disabled in quick mode).", "binaryinfo"),
+            new CommandHelpEntry(CommandHelpType.Analysis, "syscall", "syscall <list|last|failed|tid|name|contains|export|clear|trace|rule|rules>", "Inspect syscall history while trace is enabled and manage syscall behavior/rules.", "syscalls"),
+            new CommandHelpEntry(CommandHelpType.Analysis, "calltrace", "calltrace <on|off|clear|list|depth>", "Trace call/ret instructions and maintain a lightweight call stack.", "ct"),
+            new CommandHelpEntry(CommandHelpType.Analysis, "callstack", "callstack [thread_id] [max_frames]", "Show the traced call stack for a thread.", "bt"),
+            new CommandHelpEntry(CommandHelpType.Analysis, "funcmon", "funcmon <address|symbol> [cc] [arg_types...]", "Monitor function enter/leave with parameters."),
+            new CommandHelpEntry(CommandHelpType.Analysis, "ldrplog", "ldrplog <address>|off|once", "Decode internal ntdll loader log calls."),
+            new CommandHelpEntry(CommandHelpType.Network, "pcap", "pcap <on|off|status> [path]", "Dump emulated network traffic to a pcap file.", "netdump", "capture")
         };
 
         private static readonly Dictionary<string, CommandHelpEntry> CommandHelpLookup = BuildCommandHelpLookup();
@@ -99,20 +110,115 @@ namespace Brovan.EmulationMenu
         {
             if (args.Length > 0 && CommandHelpLookup.TryGetValue(args[0], out CommandHelpEntry entry))
             {
-                PrintHighlight($"[*] {entry.Name}", true);
-                Console.WriteLine($"Usage: {entry.Usage}");
-                Console.WriteLine(entry.Description);
-                if (entry.Aliases.Length > 0)
-                {
-                    Console.WriteLine($"Aliases: {string.Join(", ", entry.Aliases)}");
-                }
+                ShowHelpEntry(entry);
                 return;
             }
 
-            PrintHighlight("[*] Available commands:", true);
-            foreach (CommandHelpEntry cmd in CommandHelpEntries)
+            ShowHelpOverview();
+        }
+
+        private static readonly CommandHelpType[] HelpTypeOrder =
+        {
+            CommandHelpType.Core,
+            CommandHelpType.Debug,
+            CommandHelpType.Memory,
+            CommandHelpType.Analysis,
+            CommandHelpType.Network,
+        };
+
+        private static string GetHelpTypeLabel(CommandHelpType type)
+        {
+            return type switch
             {
-                Console.WriteLine($"  {cmd.Usage.PadRight(32)} {cmd.Description}");
+                CommandHelpType.Core => "Core",
+                CommandHelpType.Debug => "Debug",
+                CommandHelpType.Memory => "Memory",
+                CommandHelpType.Analysis => "Analysis",
+                CommandHelpType.Network => "Network",
+                _ => type.ToString(),
+            };
+        }
+
+        private static void WriteColored(string text, ConsoleColor color)
+        {
+            if (Console.IsOutputRedirected)
+            {
+                Console.Write(text);
+                return;
+            }
+
+            Console.ForegroundColor = color;
+            Console.Write(text);
+            Console.ResetColor();
+        }
+
+        private static void WriteColoredLine(string text, ConsoleColor color)
+        {
+            WriteColored(text, color);
+            Console.WriteLine();
+        }
+
+        private static void WriteHelpSeparator()
+        {
+            if (Console.IsOutputRedirected)
+            {
+                Console.WriteLine(new string('-', 56));
+                return;
+            }
+
+            WriteColoredLine(new string('─', 56), ConsoleColor.DarkGray);
+        }
+
+        private static void ShowHelpEntry(CommandHelpEntry entry)
+        {
+            WriteColoredLine($"Help: {entry.Name}", ConsoleColor.Cyan);
+            WriteHelpSeparator();
+
+            WriteColored("Usage: ", ConsoleColor.DarkGray);
+            WriteColoredLine(entry.Usage, ConsoleColor.Yellow);
+
+            WriteColored("Type: ", ConsoleColor.DarkGray);
+            WriteColoredLine(GetHelpTypeLabel(entry.Type), ConsoleColor.Green);
+
+            WriteColored("Description: ", ConsoleColor.DarkGray);
+            WriteColoredLine(entry.Description, ConsoleColor.White);
+
+            if (entry.Aliases.Length > 0)
+            {
+                WriteColored("Aliases: ", ConsoleColor.DarkGray);
+                WriteColoredLine(string.Join(", ", entry.Aliases), ConsoleColor.Cyan);
+            }
+        }
+
+        private static void ShowHelpOverview()
+        {
+            WriteColoredLine("Type `help <command>` for command details.\n", ConsoleColor.DarkGray);
+
+            foreach (CommandHelpType type in HelpTypeOrder)
+            {
+                CommandHelpEntry[] entries = CommandHelpEntries.Where(entry => entry.Type == type).ToArray();
+                if (entries.Length == 0)
+                    continue;
+
+                WriteColoredLine(GetHelpTypeLabel(type), ConsoleColor.Green);
+                WriteColoredLine(new string('─', 56), ConsoleColor.DarkGray);
+
+                int CommandWidth = entries.Max(entry => entry.Name.Length);
+
+                foreach (CommandHelpEntry cmd in entries)
+                {
+                    if (Console.IsOutputRedirected)
+                    {
+                        Console.WriteLine($"  {cmd.Name.PadRight(CommandWidth + 2)} {cmd.Description}");
+                        continue;
+                    }
+
+                    Console.Write("  ");
+                    WriteColored(cmd.Name.PadRight(CommandWidth + 2), ConsoleColor.Yellow);
+                    WriteColoredLine(cmd.Description, ConsoleColor.Gray);
+                }
+
+                Console.WriteLine();
             }
         }
 
