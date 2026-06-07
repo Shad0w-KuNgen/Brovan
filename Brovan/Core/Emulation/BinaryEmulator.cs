@@ -450,6 +450,7 @@ namespace Brovan.Core.Emulation
         internal int CurrentThreadId = -1;
         internal int NextThreadId = 1;
         private bool SchedulerRefreshRequested;
+        internal bool EscapeScheduler;
 
         internal EmulatedThread CurrentThread => CurrentThreadId == -1 || !Threads.TryGetValue((uint)CurrentThreadId, out EmulatedThread thread) ? null : thread;
 
@@ -2316,6 +2317,15 @@ namespace Brovan.Core.Emulation
                 if (!ImmaBeEmulatedOOO.SwitchingContext)
                     SaveContext(ImmaBeEmulatedOOO);
 
+                if (EscapeScheduler)
+                {
+                    if (Debug)
+                        TriggerDebugMessage($"scheduler: escape requested after slice tid={ImmaBeEmulatedOOO.ThreadId}");
+
+                    EscapeScheduler = false;
+                    return true;
+                }
+
                 uint SchedulerSliceWork = 1;
 
                 bool CompletedFullQuantum = false;
@@ -2534,7 +2544,7 @@ namespace Brovan.Core.Emulation
             Guest.Initialize(this, _binary);
             if (IsArchX86Guest)
             {
-                if(IsX64Guest)
+                if (IsX64Guest)
                 {
                     _emulator.WriteRegister(Registers.UC_X86_REG_RFLAGS, 0x202);
                 }

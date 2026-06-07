@@ -125,13 +125,13 @@ namespace Brovan
 
         internal static bool PrepareDebuggerResume()
         {
-            RestoreDebuggerPausedThreadStates();
+            ApplyDebuggerPausedThreadStates(true);
             return StepPastCurrentBreakpoint();
         }
 
         internal static void RestoreDebuggerPause()
         {
-            RestoreDebuggerPausedThreadStates();
+            ApplyDebuggerPausedThreadStates(true);
         }
 
         internal static void ArmCurrentBreakpointSkip()
@@ -1291,9 +1291,11 @@ namespace Brovan
 
             DebuggerPaused = DebuggerPausedThreadStates.Count != 0 || DebuggerPausedThreadOrder.Count != 0;
             Emulator.StopEmulation();
+            ApplyDebuggerPausedThreadStates(false);
+            Emulator.EscapeScheduler = true;
         }
 
-        private static void RestoreDebuggerPausedThreadStates()
+        private static void ApplyDebuggerPausedThreadStates(bool ClearSnapshot)
         {
             if (!DebuggerPaused || Emulator == null)
                 return;
@@ -1316,6 +1318,9 @@ namespace Brovan
                 if (DebuggerPausedThreadExitCodes.TryGetValue(Entry.Key, out int ExitCode))
                     Thread.ExitCode = ExitCode;
             }
+
+            if (!ClearSnapshot)
+                return;
 
             DebuggerPausedThreadStates.Clear();
             DebuggerPausedThreadExitCodes.Clear();

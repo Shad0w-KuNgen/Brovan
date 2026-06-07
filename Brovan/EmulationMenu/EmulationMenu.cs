@@ -1842,7 +1842,10 @@ namespace Brovan.EmulationMenu
                         if (!PrepareDebuggerResume())
                             break;
 
-                        Emulator.StartEmulation(Emulator.ReadRegister(Emulator.IPRegister), 0);
+                        if (Emulator.Threads.Count > 0)
+                            Emulator.RunMlfqScheduler();
+                        else
+                            Emulator.StartEmulation(Emulator.ReadRegister(Emulator.IPRegister), 0);
                         break;
                     }
                 case "map":
