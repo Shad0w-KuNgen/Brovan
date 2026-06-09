@@ -10,7 +10,7 @@ namespace Brovan.Core.Emulation.OS.Windows
         private const uint IoctlConDrvCompleteIo = 0x0050000B;
         private const uint IoctlConDrvReadInput = 0x0050000F;
         private const uint IoctlConDrvWriteOutput = 0x00500013;
-        private const uint IoctlConDrvIssueUserIo = 0x00500014;
+        private const uint IoctlConDrvIssueUserIo = 0x00500016;
         private const uint IoctlConDrvSetServerInformation = 0x0050001F;
         private const uint IoctlConDrvGetServerPid = 0x00500023;
         private const uint IoctlConDrvGetDisplayMode = 0x00500027;
