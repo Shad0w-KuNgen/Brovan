@@ -15,7 +15,7 @@ namespace Brovan.Core.Emulation.OS.Windows
                 ulong JobObjectInformationClass = (uint)Instance.WinHelper.GetArg64(1);
                 ulong JobObjectInformation = Instance.WinHelper.GetArg64(2);
                 ulong JobObjectInformationLength = (uint)Instance.WinHelper.GetArg64(3);
-                ulong ReturnLength = (uint)Instance.WinHelper.GetArg64(4);
+                ulong ReturnLength = Instance.WinHelper.GetArg64(4);
                 return HandleQuery(Instance, JobHandle, JobObjectInformationClass, JobObjectInformation, JobObjectInformationLength, ReturnLength);
             }
 
@@ -206,7 +206,8 @@ namespace Brovan.Core.Emulation.OS.Windows
                 Instance.WinHelper.UpdateProcessTimes(Process);
                 TotalUserTime += (ulong)Process.UserTime;
                 TotalKernelTime += (ulong)Process.KernelTime;
-                ActiveProcesses++;
+                if (Process.ExitTime == 0)
+                    ActiveProcesses++;
             }
 
             uint TotalTerminatedProcesses = TotalProcesses >= ActiveProcesses ? TotalProcesses - ActiveProcesses : 0;
