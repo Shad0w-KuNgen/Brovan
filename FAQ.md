@@ -25,6 +25,25 @@ The goal is to make it easier to inspect, modify, and instrument execution for r
 </details>
 
 <details>
+<summary><b>What makes Brovan different from projects like Qiling, Binee, UnicornPE?</b></summary>
+
+---
+
+Brovan and other projects like Qiling have very different design goals.
+
+Qiling is written in Python and operates primarily at the Windows API level. This makes it very flexible for scripting and rapid prototyping, but it also means every Windows API function that software depends on has to be reimplemented. Maintaining accurate behavior across thousands of APIs is a significant challenge, and missing or incomplete implementations can lead to compatibility issues, along with essential but missing features.
+
+Brovan takes a different approach. Instead of emulating the Windows API, it operates at the system call level. It loads the host system's native Windows libraries into the emulated process and lets those libraries perform process initialization and API functionality. This greatly reduces the amount of code that needs to be maintained while providing behavior that is much closer to a real Windows environment, since the emulator is using the same libraries installed on your system. It focuses on guest syscall handling, process startup, thread/TEB setup, and module loading. On Windows, it can load native modules such as ntdll.dll and resolve core startup routines from them, which keeps guest behavior closer to how a real system boots a process.
+
+This design allows development to focus primarily on correctly implementing the kernel interface (system calls) rather than recreating the behavior of every exported function in every DLL. The result is higher compatibility, less duplicated code, and fewer opportunities for API implementation bugs.
+
+Brovan also targets both Windows PE and Linux ELF binaries, making it a flexible foundation for emulation that is designed around direct guest execution rather than a scripting-first abstraction.
+
+Ultimately, the two projects target different use cases. Qiling is an excellent choice if you need a mature scripting and instrumentation framework. Brovan is designed for users who prioritize performance, compatibility, and faithful emulation with minimal reimplementation of Windows internals, as you also have an interactive menu to emulate from which makes it user-friendly.
+
+</details>
+
+<details>
 <summary><b>How does Brovan enforce sandboxing?</b></summary>
 
 ---
