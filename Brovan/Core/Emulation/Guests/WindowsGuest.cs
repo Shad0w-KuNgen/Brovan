@@ -466,6 +466,16 @@ namespace Brovan.Core.Emulation.Guests
             }
 
             State = Instance._emulator.Emulate(Thread.Context.RIP, 0, 0, QuantumInstructions);
+            if (!State && Instance._emulator.GetLastError() == UCErrors.UC_ERR_EXCEPTION)
+            {
+                ulong EFlags = Instance.ReadRegister(Registers.UC_X86_REG_EFLAGS);
+                if ((EFlags & (ulong)CPUFlags.TF) != 0 && !ThreadState.DispatchException)
+                {
+                    QueueUserModeException(Instance, NTSTATUS.STATUS_SINGLE_STEP);
+                    State = true;
+                }
+            }
+
             if (Instance.CurrentThread != null && WinEmulatedThread.GetState(Instance.CurrentThread).DispatchException)
                 State = true;
             return true;
@@ -678,6 +688,9 @@ namespace Brovan.Core.Emulation.Guests
         {
             switch (InterruptNumber)
             {
+                case 1:
+                    QueueUserModeException(Instance, NTSTATUS.STATUS_SINGLE_STEP);
+                    return true;
                 case 3:
                     QueueUserModeException(Instance, NTSTATUS.STATUS_BREAKPOINT);
                     return true;
@@ -711,6 +724,15 @@ namespace Brovan.Core.Emulation.Guests
         {
             if (Instance._binary == null || (!IsBlob && Instance._binary.FileFormat != BinaryFormat.PE))
                 return;
+
+            if (Status == NTSTATUS.STATUS_SINGLE_STEP)
+            {
+                ulong EFlags = Instance.ReadRegister(Registers.UC_X86_REG_EFLAGS);
+                Instance.WriteRegister(Registers.UC_X86_REG_EFLAGS, EFlags & ~(ulong)CPUFlags.TF);
+
+                ulong Dr6 = Instance.ReadRegister(Registers.UC_X86_REG_DR6);
+                Instance.WriteRegister(Registers.UC_X86_REG_DR6, Dr6 | (1UL << 14));
+            }
 
             uint ThreadId = (uint)Instance.CurrentThreadId;
             if (!Instance.Threads.TryGetValue(ThreadId, out EmulatedThread Thread) || Thread == null)
@@ -888,6 +910,19 @@ namespace Brovan.Core.Emulation.Guests
             Thread.Context.RIP = StartAddress;
             Thread.Context.RSP = InitialStack;
             Thread.Context.RFLAGS = 0x202;
+            Thread.Context.MXCSR = Instance.ReadRegister(Registers.UC_X86_REG_MXCSR);
+            Thread.Context.CS = Instance.ReadRegister(Registers.UC_X86_REG_CS);
+            Thread.Context.DS = Instance.ReadRegister(Registers.UC_X86_REG_DS);
+            Thread.Context.ES = Instance.ReadRegister(Registers.UC_X86_REG_ES);
+            Thread.Context.FS = Instance.ReadRegister(Registers.UC_X86_REG_FS);
+            Thread.Context.GS = Instance.ReadRegister(Registers.UC_X86_REG_GS);
+            Thread.Context.SS = Instance.ReadRegister(Registers.UC_X86_REG_SS);
+            Thread.Context.DR0 = Instance.ReadRegister(Registers.UC_X86_REG_DR0);
+            Thread.Context.DR1 = Instance.ReadRegister(Registers.UC_X86_REG_DR1);
+            Thread.Context.DR2 = Instance.ReadRegister(Registers.UC_X86_REG_DR2);
+            Thread.Context.DR3 = Instance.ReadRegister(Registers.UC_X86_REG_DR3);
+            Thread.Context.DR6 = Instance.ReadRegister(Registers.UC_X86_REG_DR6);
+            Thread.Context.DR7 = Instance.ReadRegister(Registers.UC_X86_REG_DR7);
 
             Instance.Threads[Thread.ThreadId] = Thread;
             Instance.ThreadOrder.Add((int)Thread.ThreadId);
@@ -959,6 +994,19 @@ namespace Brovan.Core.Emulation.Guests
             ulong contextAddress = Instance.BuildInitialContext(InitialContextRip, InitialRSP, InitialContextRcx, InitialContextRdx);
             Thread.Context.RIP = LdrInitializeThunk;
             Thread.Context.RSP = InitialRSP;
+            Thread.Context.MXCSR = Instance.ReadRegister(Registers.UC_X86_REG_MXCSR);
+            Thread.Context.CS = Instance.ReadRegister(Registers.UC_X86_REG_CS);
+            Thread.Context.DS = Instance.ReadRegister(Registers.UC_X86_REG_DS);
+            Thread.Context.ES = Instance.ReadRegister(Registers.UC_X86_REG_ES);
+            Thread.Context.FS = Instance.ReadRegister(Registers.UC_X86_REG_FS);
+            Thread.Context.GS = Instance.ReadRegister(Registers.UC_X86_REG_GS);
+            Thread.Context.SS = Instance.ReadRegister(Registers.UC_X86_REG_SS);
+            Thread.Context.DR0 = Instance.ReadRegister(Registers.UC_X86_REG_DR0);
+            Thread.Context.DR1 = Instance.ReadRegister(Registers.UC_X86_REG_DR1);
+            Thread.Context.DR2 = Instance.ReadRegister(Registers.UC_X86_REG_DR2);
+            Thread.Context.DR3 = Instance.ReadRegister(Registers.UC_X86_REG_DR3);
+            Thread.Context.DR6 = Instance.ReadRegister(Registers.UC_X86_REG_DR6);
+            Thread.Context.DR7 = Instance.ReadRegister(Registers.UC_X86_REG_DR7);
 
             if (Instance._binary.Architecture == BinaryArchitecture.x64)
             {
